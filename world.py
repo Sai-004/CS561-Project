@@ -59,13 +59,15 @@ bin_positions = [
 
 bin_colors = [[0, 0, 1, 1], [0, 1, 0, 1], [1, 0, 0, 1]]  # Blue, Green, Red
 bin_tokens = [1, 2, 3]  # Matching color tokens
-bins = []
 
+
+bins = []
 for pos, color, token in zip(bin_positions, bin_colors, bin_tokens):
     bin_shape = p.createCollisionShape(p.GEOM_BOX, halfExtents=[0.5, 0.5, 0.2])
     bin_body = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=bin_shape, basePosition=[pos[0], pos[1], 0.1])
     p.changeVisualShape(bin_body, -1, rgbaColor=color)
-    bins.append((bin_body, token))  # Store (bin ID, bin token)
+    bins.append((bin_body, token, pos))  # Store (bin ID, bin token, bin position)
+
 
 # Create Cylinders (Each cylinder gets a color token + unique cylinder number)
 cylinder_colors = {

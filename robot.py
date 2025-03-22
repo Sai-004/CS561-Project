@@ -6,14 +6,20 @@ import time
 class Robot:
     def __init__(self, start_pos, cylinders, bins, speed=0.5, camera_enabled=True):
         self.robot_id = p.loadURDF("r2d2.urdf", start_pos)
-        self.cylinders = cylinders  # List of (cylinder_id, cylinder_color, token)
-        self.bins = bins  # List of (bin_id, token)
+        self.available_cylinders = cylinders[:]  # Initially, all cylinders are available
+        self.collected_cylinders = []  # Stores cylinders that have been picked up and dropped off
+        self.bins = {token: pos for _, token, pos in bins}  # Map token to bin position
         self.base_speed = speed
-        self.speed = speed  # Current speed, dynamically adjusted
+        self.current_speed = 0.0
+        self.acceleration = 0.05
         self.camera_enabled = camera_enabled
-        self.attached_object = None  # Track attached object
-        self.avoiding_obstacles = False
-        self.obstacle_avoidance_end_time = 0
+        self.attached_object = None
+        self.target_bin = None  # Bin to move toward after pickup
+        self.last_motion_direction = 0  
+
+        # Restrict motion to XY plane and allow only yaw rotation
+        p.changeDynamics(self.robot_id, -1, linearDamping=0, angularDamping=0)
+        p.resetBaseVelocity(self.robot_id, [0, 0, 0], [0, 0, 0])
 
         if self.camera_enabled:
             self.setup_camera()
@@ -22,117 +28,122 @@ class Robot:
         """Initialize camera parameters and position it slightly in front of the robot and tilted downward."""
         self.camera_width = 160
         self.camera_height = 80
-        self.fov = 45  # Increased field of view
+        self.fov = 30
         self.aspect = self.camera_width / self.camera_height
         self.near_val = 0.02
         self.far_val = 3.0
 
     def get_camera_feed(self, tilt_factor=0.4):
-        """Captures the robot's camera feed and processes it to detect objects."""
+        """Captures the robot's camera feed and positions it lower, closer to the feet."""
         robot_pos, robot_orientation = p.getBasePositionAndOrientation(self.robot_id)
-        robot_yaw = p.getEulerFromQuaternion(robot_orientation)[2]  # Extract yaw angle
-        
-        # Adjust camera position slightly in front and tilted downward
-        camera_eye = np.array(robot_pos) + np.array([0.2, 0, -0.1])  # Move camera forward and raise height
-        forward_vector = np.array([np.cos(robot_yaw), np.sin(robot_yaw), -tilt_factor])  # Dynamic tilt
+
+        # Get robot velocity
+        velocity, _ = p.getBaseVelocity(self.robot_id)
+        velocity_x, velocity_y = velocity[:2]
+        speed_magnitude = np.linalg.norm([velocity_x, velocity_y])
+
+        if speed_magnitude > 0.2:
+            self.last_motion_direction = np.arctan2(velocity_y, velocity_x)
+
+        camera_eye = np.array(robot_pos) + np.array([
+            0.2 * np.cos(self.last_motion_direction),
+            0.2 * np.sin(self.last_motion_direction),
+            -0.1
+        ])
+        forward_vector = np.array([
+            np.cos(self.last_motion_direction),
+            np.sin(self.last_motion_direction),
+            -tilt_factor * 0.7
+        ])
         target_pos = camera_eye + forward_vector
 
         view_matrix = p.computeViewMatrix(camera_eye.tolist(), target_pos.tolist(), [0, 0, 1])
         proj_matrix = p.computeProjectionMatrixFOV(self.fov, self.aspect, self.near_val, self.far_val)
 
         img_arr = p.getCameraImage(self.camera_width, self.camera_height, view_matrix, proj_matrix)
-        rgb_array = np.reshape(img_arr[2], (self.camera_height, self.camera_width, 4))  # Convert to image format
-        
-        return rgb_array[:, :, :3]  # Remove alpha channel
+        rgb_array = np.reshape(img_arr[2], (self.camera_height, self.camera_width, 4))
+
+        print("RGB Camera Data:", rgb_array.shape)
+        return rgb_array[:, :, :3]
 
     def detect_nearest_object(self):
-        """Processes camera feed and detects the nearest object based on color."""
+        """Finds the nearest available cylinder and returns its distance."""
         min_distance = float('inf')
-        nearest_cylinder_color = None
+        nearest_cylinder = None
 
         robot_pos, _ = p.getBasePositionAndOrientation(self.robot_id)
-        for cylinder_id, cylinder_color, token in self.cylinders:
+        for cylinder_id, token, _ in self.available_cylinders:
             cyl_pos, _ = p.getBasePositionAndOrientation(cylinder_id)
             distance = np.linalg.norm(np.array(robot_pos[:2]) - np.array(cyl_pos[:2]))
 
             if distance < min_distance:
                 min_distance = distance
-                nearest_cylinder_color = token  # Use token (color name)
+                nearest_cylinder = (cylinder_id, token, cyl_pos)
 
-        frame = self.get_camera_feed()  # Use default tilt
-
-        if frame is None or frame.size == 0:
-            print("Warning: Empty camera frame!")
-            return None, float('inf')
-
-        hsv = cv2.cvtColor(np.array(frame, dtype=np.uint8), cv2.COLOR_BGR2HSV)
-
-        # Debugging: Print HSV values at center
-        center_x, center_y = self.camera_width // 2, int(self.camera_height * 0.6)
-        print(f"HSV Data at ({center_x}, {center_y}): {hsv[center_y, center_x]}")
-
-        # Define color ranges for waste detection
-        color_ranges = {
-            "Wet Waste": ([100, 150, 50], [140, 255, 255]),  # Blue
-            "Dry Waste": ([35, 100, 50], [85, 255, 255]),   # Green
-            "Hazardous": ([0, 100, 50], [10, 255, 255]),    # Red
-        }
-
-        detected_object = None
-        max_area = 0
-
-        for label, (lower, upper) in color_ranges.items():
-            mask = cv2.inRange(hsv, np.array(lower), np.array(upper))
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-            if not contours:
-                continue  # Skip if no object detected
-
-            for contour in contours:
-                area = cv2.contourArea(contour)
-                if area > max_area:
-                    max_area = area
-                    detected_object = label
-
-        print(f"Camera Detected Object: {detected_object}")
-        print(f"Nearest Cylinder Color: {nearest_cylinder_color}, Distance: {min_distance:.2f}m")
-
-        return detected_object, min_distance
-
+        return nearest_cylinder, min_distance
 
     def move_toward(self):
-        """Moves toward detected waste object dynamically, slows down within 0.5m, stops at 0.43m, and tilts camera."""
+        """Moves toward a detected object, stops at 0.43m, then carries it to the correct bin."""
+        robot_pos, robot_orientation = p.getBasePositionAndOrientation(self.robot_id)
+
         if self.attached_object:
-            p.resetBaseVelocity(self.robot_id, [0, 0, 0])  # Halt when holding an object
-            return
+            # Moving to correct bin
+            direction = np.array(self.target_bin) - np.array(robot_pos[:2])
+            distance = np.linalg.norm(direction)
 
-        if self.avoiding_obstacles and time.time() < self.obstacle_avoidance_end_time:
-        # Obstacle avoidance mode is active
-            p.resetBaseVelocity(self.robot_id, [-self.speed, self.speed, 0])  # Move sideways
-            return
+            if distance < 0.3:  # Stop before dropping
+                print(f"Halting before dropping cylinder at {self.target_bin}")
+                p.resetBaseVelocity(self.robot_id, [0, 0, 0])
+                time.sleep(1)  # Pause before dropping
 
-        detected_object, distance = self.detect_nearest_object()
-    
-        if detected_object:
-            if distance < 0.48:
-                print(f"Stopping: {detected_object} is within {distance:.2f}m")
-                self.speed = 0
-                tilt_factor = 1.0  # Fully downward when stopped
-            elif distance < 0.7:
-                self.speed = self.base_speed * ((distance - 0.48) / (0.7 - 0.48))  # Linear slowdown
-                tilt_factor = 0.4 + (1.0 - 0.4) * ((0.7 - distance) / (0.7 - 0.48))  # Gradual downward tilt
+                print("Dropping cylinder...")
+                p.removeConstraint(self.attached_object)  # Release object
+                self.collected_cylinders.append(self.attached_object)  # Move to collected list
+                self.attached_object = None
+                self.current_speed = 0.0  # Reset speed after drop
             else:
-                self.speed = self.base_speed  # Full speed when farther than 0.7m
-                tilt_factor = 0.4  # Default tilt
+                direction = direction / np.linalg.norm(direction)
+                self.current_speed = min(self.current_speed + self.acceleration, self.base_speed)
+                velocity = self.current_speed * direction
+                p.resetBaseVelocity(self.robot_id, [velocity[0], velocity[1], 0], [0, 0, 0])
+                print(f"Moving to bin: {self.target_bin}, Speed: {self.current_speed:.2f}")
+            return
 
-            print(f"Moving towards: {detected_object} at {distance:.2f}m away, Speed: {self.speed:.2f}m/s, Tilt Factor: {tilt_factor:.2f}")
-            # self.get_camera_feed(tilt_factor)  # Apply the calculated tilt
-            p.resetBaseVelocity(self.robot_id, [self.speed, 0, 0])  # Adjust speed dynamically
+        nearest_cylinder, distance = self.detect_nearest_object()
 
-        else:
-            p.resetBaseVelocity(self.robot_id, [0, 0, 0])  # Stop if no object detected
+        if nearest_cylinder and not self.attached_object:
+            cylinder_id, token, cylinder_pos = nearest_cylinder
+            direction = np.array(cylinder_pos[:2]) - np.array(robot_pos[:2])
+            direction = direction / np.linalg.norm(direction) if np.linalg.norm(direction) > 0 else [0, 0]
 
+            if distance < 0.45:
+                print(f"Halting before attaching to cylinder {cylinder_id}")
+                p.resetBaseVelocity(self.robot_id, [0, 0, 0])
+                time.sleep(1)  # Pause before attaching
+
+                print(f"Attaching to cylinder {cylinder_id}")
+                self.attached_object = p.createConstraint(
+                    self.robot_id, -1, cylinder_id, -1, p.JOINT_FIXED, [0, 0, 0], [0, 0, 0], [0, 0, -0.05]
+                )
+
+                # Prevent unwanted rotation by locking roll & pitch
+                p.changeDynamics(self.robot_id, -1, angularDamping=1.0, mass=10)
+                p.resetBaseVelocity(self.robot_id, [0, 0, 0], [0, 0, 0])
+
+                # Set target bin based on color token
+                self.target_bin = self.bins.get(token, (-4, -2.3))  # Default bin if not found
+                print(f"Target bin for cylinder {cylinder_id} set to {self.target_bin}")
+
+                # Remove from available list, add to collected list
+                self.available_cylinders = [cyl for cyl in self.available_cylinders if cyl[0] != cylinder_id]
+                self.current_speed = 0.0  # Reset speed for gradual acceleration
+            else:
+                self.current_speed = min(self.current_speed + self.acceleration, self.base_speed)
+                velocity = self.current_speed * direction
+                p.resetBaseVelocity(self.robot_id, [velocity[0], velocity[1], 0], [0, 0, 0])  # Z velocity restricted
+                print(f"Moving to cylinder {cylinder_id}, Distance: {distance:.2f}, Speed: {self.current_speed:.2f}")
 
     def update(self):
         """Main update function to process camera input and move accordingly."""
-        self.move_toward()  # Move toward an object dynamically
+        self.get_camera_feed()  # Capture and print camera data
+        self.move_toward()

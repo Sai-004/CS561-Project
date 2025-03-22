@@ -105,6 +105,7 @@ for _ in range(5000):
     if robot.camera_enabled:
         camera_feed = robot.get_camera_feed()
         if camera_feed is not None:
+            camera_feed = camera_feed.astype("uint8")
             cv2.imshow("Robot View", camera_feed)
             cv2.waitKey(1)
     

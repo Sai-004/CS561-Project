@@ -1,2 +1,1 @@
-Fixed in place
-        baseCollisionShapeIndex=wal
+check

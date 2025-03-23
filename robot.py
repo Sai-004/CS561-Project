@@ -21,8 +21,11 @@ class Robot:
         self.target_bin = None  
         self.last_motion_direction = 0  
         self.bin_fill_index = {1: 0, 2: 0, 3: 0}  
+        
+        # Increase robot mass for better stability
+        p.changeDynamics(self.robot_id, -1, mass=100)
 
-        bin_size = 0.7  
+        bin_size = 1  
         self.bin_corners = {}
 
         for bin_body, token, pos in bins:
@@ -62,7 +65,7 @@ class Robot:
         camera_eye = np.array(robot_pos) + np.array([
             0.2 * np.cos(self.last_motion_direction),
             0.2 * np.sin(self.last_motion_direction),
-            -0.1
+            -0.2
         ])
         forward_vector = np.array([
             np.cos(self.last_motion_direction),
@@ -101,22 +104,32 @@ class Robot:
             direction = np.array(self.target_bin[:2]) - np.array(robot_pos[:2])
             distance = np.linalg.norm(direction)
 
-            if distance < 1.5:
+            if distance < 1.8:
                 p.resetBaseVelocity(self.robot_id, [0, 0, 0])
 
-                # Get the next available corner for this bin
-                bin_corners = self.bin_corners[self.target_bin_token]
-                drop_position = bin_corners[self.bin_fill_index[self.target_bin_token] % 4]
-                self.bin_fill_index[self.target_bin_token] += 1  # Move to the next position for next drop
+                # Define a 3x3 grid inside the bin for placement
+                bin_size = 2.0  # Full width of bin (1.0 radius * 2)
+                grid_size = 3  # 3x3 grid
+                cell_spacing = bin_size / (grid_size + 1)  # Space between positions
 
-                # Release the attachment before placing
+                bx, by = self.target_bin  # Bin center
+                row = self.bin_fill_index[self.target_bin_token] // grid_size
+                col = self.bin_fill_index[self.target_bin_token] % grid_size
+
+                # Calculate position within the bin using grid placement
+                drop_x = bx - bin_size / 2 + (col + 1) * cell_spacing
+                drop_y = by - bin_size / 2 + (row + 1) * cell_spacing
+                drop_position = (drop_x, drop_y)
+
+                self.bin_fill_index[self.target_bin_token] += 1  
+
                 if self.attachment_constraint is not None:
                     p.removeConstraint(self.attachment_constraint)
                     self.attachment_constraint = None  
 
-                # Place the cylinder at the calculated bin corner position
+                # Place cylinder at calculated grid position
                 p.resetBasePositionAndOrientation(self.attached_object, 
-                                                [drop_position[0], drop_position[1], 1],  # Z slightly above ground
+                                                [drop_position[0], drop_position[1], 1],  
                                                 [0, 0, 0, 1])
 
                 self.collected_cylinders.append(self.attached_object)
@@ -149,7 +162,6 @@ class Robot:
                     self.robot_id, -1, cylinder_id, -1, p.JOINT_FIXED, [0, 0, 0], [0, 0, 0], [0, 0, -0.05]
                 )
                 self.attached_object = cylinder_id  
-
                 self.target_bin = self.bins.get(token, (-4, -2.3))  
                 self.target_bin_token = token  
 
@@ -160,7 +172,19 @@ class Robot:
                 velocity = self.current_speed * direction
                 p.resetBaseVelocity(self.robot_id, [velocity[0], velocity[1], 0], [0, 0, 0])
 
+    def check_and_rebalance(self):
+        position, orientation = p.getBasePositionAndOrientation(self.robot_id)
+        roll, pitch, yaw = p.getEulerFromQuaternion(orientation)
+
+        if abs(roll) > 0.2 or abs(pitch) > 0.2:  # If tilt exceeds ~15 degrees
+            print("Robot tilted! Resetting orientation...")
+
+            # Maintain the current position but reset orientation to upright
+            upright_orientation = p.getQuaternionFromEuler([0, 0, yaw])  # Keep yaw, reset roll & pitch
+            p.resetBasePositionAndOrientation(self.robot_id, position, upright_orientation)
+
 
     def update(self):
+        self.check_and_rebalance()
         self.get_camera_feed()
         self.move_toward()

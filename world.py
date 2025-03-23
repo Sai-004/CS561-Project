@@ -78,7 +78,7 @@ bin_areas = []  # Store bin areas to prevent cylinder spawning inside them
 bin_radius = 1.0  # Safe distance from bins
 
 for pos, color, token in zip(bin_positions, bin_colors, bin_tokens):
-    bin_shape = p.createCollisionShape(p.GEOM_BOX, halfExtents=[0.7, 0.7, 0.3])  # INCREASED SIZE
+    bin_shape = p.createCollisionShape(p.GEOM_BOX, halfExtents=[1, 1, 0.3])  # INCREASED SIZE
     bin_body = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=bin_shape, basePosition=[pos[0], pos[1], 0.15])
     p.changeVisualShape(bin_body, -1, rgbaColor=color)
     bins.append((bin_body, token, pos))

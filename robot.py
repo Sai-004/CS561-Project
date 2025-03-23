@@ -1,23 +1,41 @@
 import pybullet as p
+import pybullet_data
 import numpy as np
 import cv2
 import time
+import random
+
 
 class Robot:
     def __init__(self, start_pos, cylinders, bins, speed=0.5, camera_enabled=True):
         self.robot_id = p.loadURDF("r2d2.urdf", start_pos)
-        self.available_cylinders = cylinders[:]  # Initially, all cylinders are available
-        self.collected_cylinders = []  # Stores cylinders that have been picked up and dropped off
-        self.bins = {token: pos for _, token, pos in bins}  # Map token to bin position
+        self.available_cylinders = cylinders[:]  
+        self.collected_cylinders = []  
+        self.bins = {token: pos for _, token, pos in bins}  
         self.base_speed = speed
         self.current_speed = 0.0
         self.acceleration = 0.05
         self.camera_enabled = camera_enabled
         self.attached_object = None
-        self.target_bin = None  # Bin to move toward after pickup
+        self.attachment_constraint = None  # Store constraint ID separately
+        self.target_bin = None  
         self.last_motion_direction = 0  
+        self.bin_fill_index = {1: 0, 2: 0, 3: 0}  
 
-        # Restrict motion to XY plane and allow only yaw rotation
+        bin_size = 0.7  
+        self.bin_corners = {}
+
+        for bin_body, token, pos in bins:
+            bx, by = pos
+            self.bin_corners[token] = [
+                (bx - bin_size / 2, by - bin_size / 2),  
+                (bx + bin_size / 2, by - bin_size / 2),  
+                (bx - bin_size / 2, by + bin_size / 2),  
+                (bx + bin_size / 2, by + bin_size / 2)   
+            ]
+
+        print("Initialized bin corners:", self.bin_corners)
+
         p.changeDynamics(self.robot_id, -1, linearDamping=0, angularDamping=0)
         p.resetBaseVelocity(self.robot_id, [0, 0, 0], [0, 0, 0])
 
@@ -25,7 +43,6 @@ class Robot:
             self.setup_camera()
 
     def setup_camera(self):
-        """Initialize camera parameters and position it slightly in front of the robot and tilted downward."""
         self.camera_width = 160
         self.camera_height = 80
         self.fov = 30
@@ -34,10 +51,7 @@ class Robot:
         self.far_val = 3.0
 
     def get_camera_feed(self, tilt_factor=0.4):
-        """Captures the robot's camera feed and positions it lower, closer to the feet."""
-        robot_pos, robot_orientation = p.getBasePositionAndOrientation(self.robot_id)
-
-        # Get robot velocity
+        robot_pos, _ = p.getBasePositionAndOrientation(self.robot_id)
         velocity, _ = p.getBaseVelocity(self.robot_id)
         velocity_x, velocity_y = velocity[:2]
         speed_magnitude = np.linalg.norm([velocity_x, velocity_y])
@@ -63,11 +77,9 @@ class Robot:
         img_arr = p.getCameraImage(self.camera_width, self.camera_height, view_matrix, proj_matrix)
         rgb_array = np.reshape(img_arr[2], (self.camera_height, self.camera_width, 4))
 
-        print("RGB Camera Data:", rgb_array.shape)
         return rgb_array[:, :, :3]
 
     def detect_nearest_object(self):
-        """Finds the nearest available cylinder and returns its distance."""
         min_distance = float('inf')
         nearest_cylinder = None
 
@@ -83,67 +95,72 @@ class Robot:
         return nearest_cylinder, min_distance
 
     def move_toward(self):
-        """Moves toward a detected object, stops at 0.43m, then carries it to the correct bin."""
-        robot_pos, robot_orientation = p.getBasePositionAndOrientation(self.robot_id)
+        robot_pos, _ = p.getBasePositionAndOrientation(self.robot_id)
 
         if self.attached_object:
-            # Moving to correct bin
-            direction = np.array(self.target_bin) - np.array(robot_pos[:2])
+            direction = np.array(self.target_bin[:2]) - np.array(robot_pos[:2])
             distance = np.linalg.norm(direction)
 
-            if distance < 0.3:  # Stop before dropping
-                print(f"Halting before dropping cylinder at {self.target_bin}")
+            if distance < 1.5:
                 p.resetBaseVelocity(self.robot_id, [0, 0, 0])
-                time.sleep(1)  # Pause before dropping
 
-                print("Dropping cylinder...")
-                p.removeConstraint(self.attached_object)  # Release object
-                self.collected_cylinders.append(self.attached_object)  # Move to collected list
-                self.attached_object = None
-                self.current_speed = 0.0  # Reset speed after drop
+                # Get the next available corner for this bin
+                bin_corners = self.bin_corners[self.target_bin_token]
+                drop_position = bin_corners[self.bin_fill_index[self.target_bin_token] % 4]
+                self.bin_fill_index[self.target_bin_token] += 1  # Move to the next position for next drop
+
+                # Release the attachment before placing
+                if self.attachment_constraint is not None:
+                    p.removeConstraint(self.attachment_constraint)
+                    self.attachment_constraint = None  
+
+                # Place the cylinder at the calculated bin corner position
+                p.resetBasePositionAndOrientation(self.attached_object, 
+                                                [drop_position[0], drop_position[1], 1],  # Z slightly above ground
+                                                [0, 0, 0, 1])
+
+                self.collected_cylinders.append(self.attached_object)
+                self.attached_object = None  
+                self.current_speed = 0.0  
+
             else:
                 direction = direction / np.linalg.norm(direction)
                 self.current_speed = min(self.current_speed + self.acceleration, self.base_speed)
                 velocity = self.current_speed * direction
-                p.resetBaseVelocity(self.robot_id, [velocity[0], velocity[1], 0], [0, 0, 0])
-                print(f"Moving to bin: {self.target_bin}, Speed: {self.current_speed:.2f}")
+                p.resetBaseVelocity(self.robot_id, [velocity[0], velocity[1], 0], [0, 0, 0])  
             return
 
         nearest_cylinder, distance = self.detect_nearest_object()
 
         if nearest_cylinder and not self.attached_object:
             cylinder_id, token, cylinder_pos = nearest_cylinder
+
+            if token == 4:
+                self.available_cylinders = [cyl for cyl in self.available_cylinders if cyl[0] != cylinder_id]
+                return
+
             direction = np.array(cylinder_pos[:2]) - np.array(robot_pos[:2])
             direction = direction / np.linalg.norm(direction) if np.linalg.norm(direction) > 0 else [0, 0]
 
-            if distance < 0.45:
-                print(f"Halting before attaching to cylinder {cylinder_id}")
+            if distance < 0.48:
                 p.resetBaseVelocity(self.robot_id, [0, 0, 0])
-                time.sleep(1)  # Pause before attaching
 
-                print(f"Attaching to cylinder {cylinder_id}")
-                self.attached_object = p.createConstraint(
+                self.attachment_constraint = p.createConstraint(
                     self.robot_id, -1, cylinder_id, -1, p.JOINT_FIXED, [0, 0, 0], [0, 0, 0], [0, 0, -0.05]
                 )
+                self.attached_object = cylinder_id  
 
-                # Prevent unwanted rotation by locking roll & pitch
-                p.changeDynamics(self.robot_id, -1, angularDamping=1.0, mass=10)
-                p.resetBaseVelocity(self.robot_id, [0, 0, 0], [0, 0, 0])
+                self.target_bin = self.bins.get(token, (-4, -2.3))  
+                self.target_bin_token = token  
 
-                # Set target bin based on color token
-                self.target_bin = self.bins.get(token, (-4, -2.3))  # Default bin if not found
-                print(f"Target bin for cylinder {cylinder_id} set to {self.target_bin}")
-
-                # Remove from available list, add to collected list
                 self.available_cylinders = [cyl for cyl in self.available_cylinders if cyl[0] != cylinder_id]
-                self.current_speed = 0.0  # Reset speed for gradual acceleration
+                self.current_speed = 0.0  
             else:
                 self.current_speed = min(self.current_speed + self.acceleration, self.base_speed)
                 velocity = self.current_speed * direction
-                p.resetBaseVelocity(self.robot_id, [velocity[0], velocity[1], 0], [0, 0, 0])  # Z velocity restricted
-                print(f"Moving to cylinder {cylinder_id}, Distance: {distance:.2f}, Speed: {self.current_speed:.2f}")
+                p.resetBaseVelocity(self.robot_id, [velocity[0], velocity[1], 0], [0, 0, 0])
+
 
     def update(self):
-        """Main update function to process camera input and move accordingly."""
-        self.get_camera_feed()  # Capture and print camera data
+        self.get_camera_feed()
         self.move_toward()

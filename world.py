@@ -6,10 +6,11 @@ import cv2
 import numpy as np
 from robot import Robot
 
+
 # Initialize PyBullet
 p.connect(p.GUI)
 p.setAdditionalSearchPath(pybullet_data.getDataPath())
-p.setGravity(0, 0, -9.8)
+p.setGravity(0, 0, -15.8)
 
 # Create Ground Plane
 plane_id = p.loadURDF("plane.urdf")
@@ -123,7 +124,7 @@ for waste_type, color in cylinder_colors.items():
                 break  # Ensure valid placement
 
         cylinder_shape = p.createCollisionShape(p.GEOM_CYLINDER, radius=0.15, height=0.3)
-        cylinder_body = p.createMultiBody(baseMass=1, baseCollisionShapeIndex=cylinder_shape, basePosition=[x_pos, y_pos, 0.15])
+        cylinder_body = p.createMultiBody(baseMass=10, baseCollisionShapeIndex=cylinder_shape, basePosition=[x_pos, y_pos, 0.15])
         p.changeVisualShape(cylinder_body, -1, rgbaColor=color)
         
         # Assign tokens: (cylinder ID, color token, cylinder number)

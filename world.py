@@ -106,7 +106,7 @@ def is_valid_spawn(x, y, radius=0.5):
 
     # Check if inside a bin
     for bx, by in bin_areas:
-        if np.linalg.norm([x - bx, y - by]) < bin_radius:
+        if np.linalg.norm([x - bx, y - by]) < 2*bin_radius:
             return False  # Too close to a bin
 
     return True  # Valid spawn position

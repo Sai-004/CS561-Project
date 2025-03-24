@@ -124,6 +124,4 @@ This document explains every function and important line of code in the workspac
   - Moves toward designated bins, drops cylinders using a grid layout, and rebalances itself when tilted.
 - The `update()` method ties together periodic stability checks, camera updates, and movement logic.
 
-This explanation follows the code flow from environment setup in `world.py` through the robot’s behaviors outlined in `robot.py`, giving you a complete picture of your simulation project.
-
 

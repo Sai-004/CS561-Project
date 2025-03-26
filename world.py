@@ -142,7 +142,7 @@ for waste_type, color in cylinder_colors.items():
         cylinders.append((cylinder_body, color_token, i))
 
 # Create Robot
-robot = Robot(start_pos=[0, 0, 0.15], cylinders=cylinders, bins=bins, speed=10, camera_enabled=True)
+robot = Robot(start_pos=[0, 0, 0.15], cylinders=cylinders, bins=bins, speed=6, camera_enabled=True)
 
 # Simulation Loop
 for _ in range(10000):

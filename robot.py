@@ -58,7 +58,7 @@ class Robot:
 
     def create_open_tray(self, start_pos):
         """Loads the 'clear_box' URDF as a tray behind the robot."""
-        p.setAdditionalSearchPath(pybullet_data.getDataPath())  # Ensure search path is set
+       
         models = models_data.model_lib()
 
         tray_model = "clear_box"

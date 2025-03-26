@@ -5,7 +5,6 @@ import random
 import cv2
 import numpy as np
 from robot import Robot
-from urdf_models import models_data
 
 
 # Initialize PyBullet
@@ -97,17 +96,6 @@ for pos, color, token in zip(bin_positions, bin_colors, bin_tokens):
     bins.append((bin_body, token, pos))
     bin_areas.append(pos)  # Store bin position
 
-    # # ✅ Create a small sphere at the bin position (for debugging)
-    # marker_radius = 0.5  # Small sphere size
-    # marker_visual = p.createVisualShape(p.GEOM_SPHERE, radius=marker_radius, rgbaColor=[1, 0, 0, 1])  # Red sphere
-    # marker_collision = p.createCollisionShape(p.GEOM_SPHERE, radius=marker_radius)  # Collision shape
-
-    # marker_id = p.createMultiBody(baseMass=0, 
-    #                               baseCollisionShapeIndex=marker_collision, 
-    #                               baseVisualShapeIndex=marker_visual, 
-    #                               basePosition=[pos[0]+3, pos[1]-0.1, 1])  # Slightly above ground
-
-
 # Create Cylinders (Ensure No Overlapping & Avoid Bins)
 cylinder_colors = {
     "Wet Waste": [0, 0, 1, 1],    # Blue
@@ -116,56 +104,48 @@ cylinder_colors = {
     "Not Waste": [1, 1, 1, 1]     # White
 }
 
-
-p.setAdditionalSearchPath(pybullet_data.getDataPath())  # Ensure search path is set
-# Load Waste Models
-models = models_data.model_lib()
-waste_categories = {
-    "Dry Waste": ['plate', 'spoon', 'potato_chip_1', 'sugar_box', 'fork', 'potato_chip_2', 'orion_pie'],
-    "Wet Waste": ['glue_1', 'shampoo', 'plastic_banana', 'plastic_orange', 'toothpaste_1', 'correction_fluid'],
-    "Hazardous": ['bleach_cleanser', 'cleanser', 'repellent', 'cracker_box', 'remote_controller_2'],
-    "Not Waste": ['mug', 'remote_controller_1', 'scissors', 'power_drill', 'green_cup', 'book_1']
-}
-
-# Object Spawning Optimization
 cylinders = []
-num_objects_per_type = 5  # 10 per category (Total: 40 objects)
-spawn_positions = []
+num_cylinders_per_type = 10
+spawn_positions = []  # Store existing cylinder positions to prevent overlap
 
 def is_valid_spawn(x, y, radius=0.5):
-    """Ensures no overlap with existing objects and avoids bins."""
+    """Check if a new cylinder position is valid (no overlap, not in bin, not in robot zone)."""
+    # Check for overlap with existing cylinders
     for px, py in spawn_positions:
         if np.linalg.norm([x - px, y - py]) < radius:
-            return False
-    for bx, by in bin_areas:
-        if np.linalg.norm([x - bx, y - by]) < 2 * bin_radius:
-            return False
-    return True
+            return False  # Too close to another cylinder
 
-# Create objects (ONLY visual models from URDF, NO extra physics shapes)
-for waste_type, model_list in waste_categories.items():
-    for i in range(num_objects_per_type):
+    # Check if inside a bin
+    for bx, by in bin_areas:
+        if np.linalg.norm([x - bx, y - by]) < 2*bin_radius:
+            return False  # Too close to a bin
+
+    return True  # Valid spawn position
+
+for waste_type, color in cylinder_colors.items():
+    color_token = COLOR_TOKENS[waste_type]
+
+    for i in range(1, num_cylinders_per_type + 1):
         while True:
             x_pos = random.uniform(-arena_length / 2 + 1, arena_length / 2 - 1)
             y_pos = random.uniform(-arena_width / 2 + 1, arena_width / 2 - 1)
+
             if np.linalg.norm([x_pos, y_pos]) > safe_zone_radius and is_valid_spawn(x_pos, y_pos):
-                spawn_positions.append((x_pos, y_pos))
+                spawn_positions.append((x_pos, y_pos))  # Store position to prevent future overlap
                 break  # Ensure valid placement
 
-        model_name = random.choice(model_list)  # Choose random model
-        model_id = p.loadURDF(models[model_name], [x_pos, y_pos, 0.15])  # Load visual only
-        cylinders.append((model_id, waste_type, i))
-
-
+        cylinder_shape = p.createCollisionShape(p.GEOM_CYLINDER, radius=0.1, height=0.2)
+        cylinder_body = p.createMultiBody(baseMass=1, baseCollisionShapeIndex=cylinder_shape, basePosition=[x_pos, y_pos, 0.15])
+        p.changeVisualShape(cylinder_body, -1, rgbaColor=color)
+        
+        # Assign tokens: (cylinder ID, color token, cylinder number)
+        cylinders.append((cylinder_body, color_token, i))
 
 # Create Robot
-robot = Robot(start_pos=[0, 0, 0.15], cylinders=cylinders, bins=bins, speed=12, camera_enabled=True)
-
-# Reduce number of iterations per render update
-frame_skip = 6  # Step simulation multiple times before rendering
+robot = Robot(start_pos=[0, 0, 0.15], cylinders=cylinders, bins=bins, speed=10, camera_enabled=True)
 
 # Simulation Loop
-for _ in range(5000):
+for _ in range(10000):
     robot.update()
     p.stepSimulation()
     

@@ -4,7 +4,7 @@ import numpy as np
 import cv2
 import time
 import random
-from urdf_models import models_data
+from pybullet_URDF_models.urdf_models import models_data
 import random
 
 

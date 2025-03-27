@@ -5,15 +5,16 @@ import random
 import cv2
 import numpy as np
 from robot import Robot
-from urdf_models import models_data
-
+from pybullet_URDF_models.urdf_models import models_data
+from pybullet_object_models.pybullet_object_models import ycb_objects
+import os
 
 # Initialize PyBullet
 p.connect(p.GUI)
 p.setAdditionalSearchPath(pybullet_data.getDataPath())
 p.setPhysicsEngineParameter(enableConeFriction=1, contactBreakingThreshold=0.001)
 p.setPhysicsEngineParameter(deterministicOverlappingPairs=1)
-p.setPhysicsEngineParameter(enableFileCaching=0)
+# p.setPhysicsEngineParameter(enableFileCaching=0)
 p.setPhysicsEngineParameter(solverResidualThreshold=0.0001)
 
 p.setGravity(0, 0, -30.8)
@@ -126,7 +127,17 @@ waste_categories = {
     "Hazardous": ['bleach_cleanser', 'cleanser', 'repellent', 'cracker_box', 'remote_controller_2'],
     "Not Waste": ['mug', 'remote_controller_1', 'scissors', 'power_drill', 'green_cup', 'book_1']
 }
+###############
+def get_path(_model_name: str) -> str:
+    return os.path.join(ycb_objects.getDataPath(), _model_name, "model.urdf")
 
+ycb_waste_categories = {
+    "Dry Waste": ['YcbChipsCan', 'YcbCrackerBox', 'YcbGelatinBox', 'YcbMasterChefCan'],
+    "Wet Waste": ['YcbPottedMeatCan', 'YcbFoamBrick', 'YcbMustardBottle','YcbTomatoSoupCan'],
+    "Hazardous": ['YcbScissors', 'YcbHammer', 'YcbMediumClamp','YcbTennisBall'],
+    "Not Waste": ['YcbBanana','YcbPear','YcbStrawberry']
+}
+###############
 # Object Spawning Optimization
 cylinders = []
 num_objects_per_type = 5  # 10 per category (Total: 40 objects)
@@ -143,7 +154,20 @@ def is_valid_spawn(x, y, radius=0.5):
     return True
 
 # Create objects (ONLY visual models from URDF, NO extra physics shapes)
-for waste_type, model_list in waste_categories.items():
+# for waste_type, model_list in waste_categories.items():
+#     for i in range(num_objects_per_type):
+#         while True:
+#             x_pos = random.uniform(-arena_length / 2 + 1, arena_length / 2 - 1)
+#             y_pos = random.uniform(-arena_width / 2 + 1, arena_width / 2 - 1)
+#             if np.linalg.norm([x_pos, y_pos]) > safe_zone_radius and is_valid_spawn(x_pos, y_pos):
+#                 spawn_positions.append((x_pos, y_pos))
+#                 break  # Ensure valid placement
+
+#         model_name = random.choice(model_list)  # Choose random model
+#         model_id = p.loadURDF(models[model_name], [x_pos, y_pos, 0.15])  # Load visual only
+#         cylinders.append((model_id, waste_type, i))
+#####################
+for waste_type, model_list in ycb_waste_categories.items():
     for i in range(num_objects_per_type):
         while True:
             x_pos = random.uniform(-arena_length / 2 + 1, arena_length / 2 - 1)
@@ -153,11 +177,9 @@ for waste_type, model_list in waste_categories.items():
                 break  # Ensure valid placement
 
         model_name = random.choice(model_list)  # Choose random model
-        model_id = p.loadURDF(models[model_name], [x_pos, y_pos, 0.15])  # Load visual only
+        model_id = p.loadURDF(get_path(model_name), [x_pos, y_pos, 0.15],flags=p.URDF_USE_INERTIA_FROM_FILE)  # Load visual only
         cylinders.append((model_id, waste_type, i))
-
-
-
+#####################
 # Create Robot
 robot = Robot(start_pos=[0, 0, 0.15], cylinders=cylinders, bins=bins, speed=12, camera_enabled=True)
 

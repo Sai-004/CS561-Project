@@ -30,7 +30,7 @@ p.changeVisualShape(plane_id, -1, textureUniqueId=-1)  # Disable texture
 arena_length = 10
 arena_width = 8
 wall_thickness = 0.1
-wall_height = 0.7
+wall_height = 0.4
 safe_zone_radius = 2  # Robot spawn zone
 
 # Create Walls

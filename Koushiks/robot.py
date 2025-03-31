@@ -13,14 +13,14 @@ from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.image import img_to_array
 
 class Robot:
-    def __init__(self, start_pos, cylinders, bins, speed=0.5, camera_enabled=True):
+    def __init__(self, start_pos, cylinders, bins, speed=0.3, camera_enabled=True):
         self.robot_id = p.loadURDF("r2d2.urdf", start_pos)
         self.available_cylinders = cylinders[:]  
         self.collected_cylinders = []  
         self.bins = {token: pos for _, token, pos in bins}  
         self.base_speed = speed
         self.current_speed = 0.0
-        self.acceleration = 0.05
+        self.acceleration = 0.02
         self.camera_enabled = camera_enabled
         self.attached_object = None
         self.attachment_constraint = None  # Store constraint ID separately
@@ -161,8 +161,8 @@ class Robot:
         ############################
         models = models_data.model_lib()
         
-        tray_model = "clear_box"
-        tray_scale = 7  # Adjusted size
+        tray_model = "clear_box_1"
+        tray_scale = 4 # Adjusted size
 
         # tray_id = p.loadURDF(models[tray_model], tray_position, globalScaling=tray_scale)
 
@@ -178,7 +178,7 @@ class Robot:
         # )
 
         # Creating partitions inside the tray
-        partition_width = 1.1
+        partition_width = 2
          # Adjust based on tray size
         partition_positions = [
             [start_pos[0], start_pos[1] - partition_width, start_pos[2] + 1.1],  # Left (Red)
@@ -187,9 +187,9 @@ class Robot:
         ]
         colors = [[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]]  # RGBA colors
         partition_ids = []
-        i = -1.1
+        i = -1.5
         for pos, color in zip(partition_positions, colors):
-            part_id = p.loadURDF(models[tray_model], pos, globalScaling=6)  # Smaller boxes
+            part_id = p.loadURDF(models[tray_model], pos, globalScaling=tray_scale)  # Smaller boxes
             p.changeVisualShape(part_id, -1, rgbaColor=color)
             partition_ids.append(part_id)
 
@@ -204,7 +204,7 @@ class Robot:
                 parentFramePosition=[0, i, 1.0],
                 childFramePosition=[0, 0, 0]
             )
-            i+= 1.1
+            i+= 1.5
 
         print("Tray with three partitions (R, G, B) attached behind the robot.")
         return partition_ids[0], partition_ids
@@ -265,60 +265,60 @@ class Robot:
     def move_toward(self, pred_class:int = 3):
         robot_pos, _ = p.getBasePositionAndOrientation(self.robot_id)
 
-        # 1️⃣ If all cylinders are collected, start placing them in bins
-        if not self.available_cylinders and self.collected_cylinders:
-            if self.current_cylinder_id is None:
-                # Choose a cylinder *only if there's no current one being placed*
-                index = random.randint(0, len(self.collected_cylinders) - 1)
-                self.current_cylinder_id, self.current_token = self.collected_cylinders.pop(index)
-                self.target_bin = self.bins.get(self.current_token, (-4, -2.3))
-                print(f"Selected cylinder {self.current_cylinder_id} for bin {self.current_token}")
+        # # 1️⃣ If all cylinders are collected, start placing them in bins
+        # if not self.available_cylinders and self.collected_cylinders:
+        #     if self.current_cylinder_id is None:
+        #         # Choose a cylinder *only if there's no current one being placed*
+        #         index = random.randint(0, len(self.collected_cylinders) - 1)
+        #         self.current_cylinder_id, self.current_token = self.collected_cylinders.pop(index)
+        #         self.target_bin = self.bins.get(self.current_token, (-4, -2.3))
+        #         print(f"Selected cylinder {self.current_cylinder_id} for bin {self.current_token}")
 
-            bin_height = 2.0  # Adjust this based on your actual bin size
+        #     bin_height = 2.0  # Adjust this based on your actual bin size
 
-            bin_x, bin_y = self.target_bin  # Get bin center position
-            bin_x+=2.5
-            bottom_y = bin_y+0.01  # Move toward the bottom edge
+        #     bin_x, bin_y = self.target_bin  # Get bin center position
+        #     bin_x+=2.5
+        #     bottom_y = bin_y+0.01  # Move toward the bottom edge
 
 
-            direction = np.array([bin_x, bottom_y]) - np.array(robot_pos[:2])
+        #     direction = np.array([bin_x, bottom_y]) - np.array(robot_pos[:2])
 
-            distance = np.linalg.norm(direction)
+        #     distance = np.linalg.norm(direction)
 
-            if distance < 0.1:  # If close enough, place the cylinder
-                print(f"Placing cylinder {self.current_cylinder_id} in bin {self.current_token}")
-                p.resetBaseVelocity(self.robot_id, [0, 0, 0])
+        #     if distance < 0.1:  # If close enough, place the cylinder
+        #         print(f"Placing cylinder {self.current_cylinder_id} in bin {self.current_token}")
+        #         p.resetBaseVelocity(self.robot_id, [0, 0, 0])
 
-                # 2️⃣ 3x3 Grid Placement inside the Bin
-                bin_size = 2.0  
-                grid_size = 3  
-                cell_spacing = bin_size / (grid_size + 1)
+        #         # 2️⃣ 3x3 Grid Placement inside the Bin
+        #         bin_size = 2.0  
+        #         grid_size = 3  
+        #         cell_spacing = bin_size / (grid_size + 1)
 
-                bx, by = self.target_bin
-                row = self.bin_fill_index[self.current_token] // grid_size
-                col = self.bin_fill_index[self.current_token] % grid_size
+        #         bx, by = self.target_bin
+        #         row = self.bin_fill_index[self.current_token] // grid_size
+        #         col = self.bin_fill_index[self.current_token] % grid_size
 
-                drop_x = bx - bin_size / 2 + (col + 1) * cell_spacing
-                drop_y = by - bin_size / 2 + (row + 1) * cell_spacing
-                drop_position = (drop_x, drop_y)
+        #         drop_x = bx - bin_size / 2 + (col + 1) * cell_spacing
+        #         drop_y = by - bin_size / 2 + (row + 1) * cell_spacing
+        #         drop_position = (drop_x, drop_y)
 
-                self.bin_fill_index[self.current_token] += 1  
+        #         self.bin_fill_index[self.current_token] += 1  
 
-                # Drop cylinder at the assigned bin position
-                p.resetBasePositionAndOrientation(self.current_cylinder_id, [drop_position[0], drop_position[1], 0.9], [0, 0, 0, 1])
-                print(f"Placed cylinder {self.current_cylinder_id} in bin {self.current_token}")
+        #         # Drop cylinder at the assigned bin position
+        #         p.resetBasePositionAndOrientation(self.current_cylinder_id, [drop_position[0], drop_position[1], 0.9], [0, 0, 0, 1])
+        #         print(f"Placed cylinder {self.current_cylinder_id} in bin {self.current_token}")
 
-                self.current_cylinder_id = None  # ✅ Reset after placement
-                self.current_speed = 0.0  
+        #         self.current_cylinder_id = None  # ✅ Reset after placement
+        #         self.current_speed = 0.0  
 
-            else:  # Move toward the bin
-                direction = direction / np.linalg.norm(direction)
-                self.current_speed = min(self.current_speed + self.acceleration, self.base_speed)
-                velocity = self.current_speed * direction
-                p.resetBaseVelocity(self.robot_id, [velocity[0], velocity[1], 0], [0, 0, 0])
-                print("Moving to bin...")
+        #     else:  # Move toward the bin
+        #         direction = direction / np.linalg.norm(direction)
+        #         self.current_speed = min(self.current_speed + self.acceleration, self.base_speed)
+        #         velocity = self.current_speed * direction
+        #         p.resetBaseVelocity(self.robot_id, [velocity[0], velocity[1], 0], [0, 0, 0])
+        #         print("Moving to bin...")
 
-            return  
+        #     return  
 
         # 3️⃣ If there are still cylinders left to collect
         nearest_cylinder, distance = self.detect_nearest_object()
@@ -346,13 +346,20 @@ class Robot:
                 col = index % grid_size
 
                 tray_x = -1 + (col + 1) * cell_spacing
-                tray_y = -1*((pred_class-1)) + (row + 1) * cell_spacing
+                tray_y = -1 + (row + 1) * cell_spacing
                 tray_position = [robot_pos[0] + tray_x, robot_pos[1] + tray_y, robot_pos[2] + 1]
 
                 self.tray_fill_index += 1  
-
+                #############
+                if pred_class == 0:
+                    tray_position = [robot_pos[0],robot_pos[1]+1,robot_pos[2]+1]
+                elif pred_class == 1:
+                    tray_position = [robot_pos[0],robot_pos[1],robot_pos[2]+1]
+                elif pred_class == 2:
+                    tray_position = [robot_pos[0],robot_pos[1]-1,robot_pos[2]+1]
+                #############
                 # Attach the cylinder to the tray
-                p.resetBasePositionAndOrientation(cylinder_id, tray_position, [0, 0, 0, 0.2])
+                p.resetBasePositionAndOrientation(cylinder_id, tray_position, [0, 0, 0, 0.1])
                 self.collected_cylinders.append((cylinder_id, token))    
                 self.available_cylinders = [cyl for cyl in self.available_cylinders if cyl[0] != cylinder_id]
                 print(f"Collected cylinder {cylinder_id}, token {token}")

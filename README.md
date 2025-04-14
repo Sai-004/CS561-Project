@@ -68,7 +68,7 @@ python world.py
 *The robot with bins covered by transparent cover.*
 
 ![image](https://github.com/user-attachments/assets/0e619325-d5a0-4aba-bdc4-cfa7361b7ab3)
-*he robot stopped at a safe distance from the object, took screenshot
+*The robot stopped at a safe distance from the object, took screenshot
 and will proceed with cnn classification and q-learning.*
 
 **What to Expect**:

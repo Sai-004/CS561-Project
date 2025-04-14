@@ -1,9 +1,9 @@
 # Anonymous Trash Collection Robot
 
-This project implements an autonomous trash collection robot using PyBullet for simulation. The robot navigates a virtual environment to collect colored cylinders (representing trash) and sorts them into appropriate bins. The project includes two implementations:
+This project implements an autonomous trash collection robot using PyBullet for simulation. The robot navigates a virtual environment to collect cylinders (representing trash) and sorts them into appropriate bins. The project includes two implementations:
 
-1. **CNN and RL Implementation**: Combines a Convolutional Neural Network (CNN) for object classification with Reinforcement Learning (RL) for decision-making.
-2. **Object Detection in PyBullet Implementation**: Uses depth-based object detection and a CNN to identify and collect trash, with RL for tray placement.
+1. **CNN and RL Implementation**: Combines a Convolutional Neural Network (CNN) for object classification with Reinforcement Learning (RL) (Q-Learning) for decision-making.
+2. **Object Detection in PyBullet Implementation**: Uses depth-based object detection.
 
 The project is organized into two folders, each containing a complete implementation with its own simulation environment.
 
@@ -15,7 +15,7 @@ The project is organized into two folders, each containing a complete implementa
   - Other supporting files (e.g., trained CNN model, URDF models).
 - **object_detection_in_pybullet/**: Contains the object detection implementation.
   - `world.py`: Main script to run the simulation.
-  - `robot.py`: Defines the `Robot` class with depth-based detection and RL-based placement.
+  - `robot.py`: Defines the `Robot` class with depth-based detection.
   - Other supporting files (e.g., trained CNN model, URDF models).
 - **requirements.txt**: Lists the Python dependencies required for both implementations.
 
@@ -64,6 +64,12 @@ This implementation uses a CNN to classify trash (red, green, blue cylinders) an
 cd cnn_and_rl
 python world.py
 ```
+![image](https://github.com/user-attachments/assets/48f09d23-8649-4221-ba81-b216e9f5aa8e)
+*The robot with bins covered by transparent cover.*
+
+![image](https://github.com/user-attachments/assets/0e619325-d5a0-4aba-bdc4-cfa7361b7ab3)
+*he robot stopped at a safe distance from the object, took screenshot
+and will proceed with cnn classification and q-learning.*
 
 **What to Expect**:
 - A PyBullet simulation window opens, showing an R2D2-like robot.
@@ -72,7 +78,7 @@ python world.py
 - Console output shows classification results, RL actions, and simulation status.
 
 ### 2. Object Detection in PyBullet Implementation
-This implementation uses depth-based detection to locate trash, ignoring the brown floor, and a CNN for classification, with RL for tray placement.
+This implementation uses depth-based detection to locate trash, ignoring the brown floor.
 
 **Steps**:
 ```bash
@@ -82,9 +88,8 @@ python world.py
 
 **What to Expect**:
 - A PyBullet simulation window opens, showing the same R2D2-like robot.
-- The robot uses depth images to detect cylinders, filters out the floor, and classifies them with the CNN.
-- Cylinders are placed in a partitioned tray using RL-based actions.
-- Console output logs detection details, classification results, and RL updates.
+- The robot uses depth images to detect cylinders, filters out the floor.
+- Console output logs detection details.
 
 ## Requirements
 The `requirements.txt` file includes:

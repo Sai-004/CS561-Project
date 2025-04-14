@@ -22,6 +22,7 @@ The project is organized into two folders, each containing a complete implementa
 ## Prerequisites
 
 - Python 3.8 or higher
+- Microsoft Visual C++ Build Tools (download from [https://visualstudio.microsoft.com/visual-cpp-build-tools/](https://visualstudio.microsoft.com/visual-cpp-build-tools/))
 - A virtual environment (recommended)
 - Windows, macOS, or Linux
 
@@ -41,6 +42,13 @@ The project is organized into two folders, each containing a complete implementa
      ```bash
      .\env\Scripts\activate
      ```
+     If the above fails due to absence of the required Execution Policy, the following command would temporarily enable the script to run:
+     ```bash
+     Set-ExecutionPolicy -Scope CurrentUser Unrestricted
+     ```
+     Use the above, then retry the previous command to run the script.
+     Also, due to Windows restriction on path length, try running the code in a shallow directory, i.e. whose absolute path length is lesser.
+     Even after this, there may be some system dependent modifications required, which would be as per your system. Please consult online help for doing so.
    - On macOS/Linux:
      ```bash
      source env/bin/activate

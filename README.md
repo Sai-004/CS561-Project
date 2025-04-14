@@ -29,7 +29,7 @@ The project is organized into two folders, each containing a complete implementa
 
 1. **Clone the Repository** (or download the project files):
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/Sai-004/CS561-Project
    cd CS561-Project
    ```
 

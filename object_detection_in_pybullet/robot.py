@@ -202,25 +202,18 @@ class Robot:
                 - depths is an array of depth values for each detected cylinder
                 - positions is a list of bounding box positions [x, y, width, height]
         """
-        # Capture RGB and depth images
         rgb_image, depth_image = self._get_rgbd_image()
-        
         # Detect cylinders using color-based detection (simulating YOLO)
         bounding_boxes = self._detect_cylinders(rgb_image)
-        
-        # Get depth for each bounding box
         depths = []
         for bbox in bounding_boxes:
             x, y, w, h = bbox
-            # Calculate center of bounding box
             center_x, center_y = int(x + w/2), int(y + h/2)
-            
-            # Get depth at center of bounding box from depth image
             if 0 <= center_y < depth_image.shape[0] and 0 <= center_x < depth_image.shape[1]:
                 depth = depth_image[center_y, center_x]
                 depths.append(depth)
             else:
-                depths.append(None)  # Invalid position
+                depths.append(None)  
         
         return depths, bounding_boxes
 
@@ -231,7 +224,6 @@ class Robot:
         Returns:
             tuple: (rgb_image, depth_image)
         """
-        # Camera parameters for consistency
         robot_pos, _ = p.getBasePositionAndOrientation(self.robot_id)
         camera_eye = np.array(robot_pos) + np.array([
             0.2 * np.cos(self.last_motion_direction),
@@ -249,20 +241,13 @@ class Robot:
             camera_eye.tolist(), target_pos.tolist(), [0, 0, 1])
         proj_matrix = p.computeProjectionMatrixFOV(
             self.fov, self.aspect, self.near_val, self.far_val)
-
-        # Get RGB and depth images in one call
         img_arr = p.getCameraImage(
             self.camera_width, self.camera_height, view_matrix, proj_matrix
         )
-
-        # Extract RGB array and convert to uint8
         rgb_array = np.reshape(
             img_arr[2], (self.camera_height, self.camera_width, 4))[:, :, :3]
-        rgb_array = rgb_array.astype(np.uint8)  # Convert to uint8
-
-        # Debugging: Print shape and dtype to verify
+        rgb_array = rgb_array.astype(np.uint8)  
         print(f"RGB image shape: {rgb_array.shape}, dtype: {rgb_array.dtype}")
-
         # Extract depth buffer and convert to actual distances
         depth_buffer = np.reshape(
             img_arr[3], [self.camera_height, self.camera_width])
@@ -273,7 +258,7 @@ class Robot:
     
     def _detect_cylinders(self, image):
         """
-        Detect red, green, and blue cylinders while ignoring black walls.
+        Detect red, green, and blue cylinders while ignoring walls.
         
         Args:
             image: RGB image from the camera
@@ -281,20 +266,13 @@ class Robot:
         Returns:
             list: List of bounding boxes [x, y, width, height]
         """
-        # Verify image format
         print(f"Input image shape: {image.shape}, dtype: {image.dtype}")
         if image.dtype != np.uint8:
             image = image.astype(np.uint8)
             print("Converted image to uint8")
-
-        # Convert image to HSV for better color segmentation
         hsv_image = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
-
-        # Create a mask to exclude black regions
         _, _, v_channel = cv2.split(hsv_image)
         not_black_mask = cv2.threshold(v_channel, 30, 255, cv2.THRESH_BINARY)[1]
-
-        # Define color ranges for each cylinder color
         lower_red1 = np.array([0, 100, 100])
         upper_red1 = np.array([10, 255, 255])
         lower_red2 = np.array([160, 100, 100])
@@ -305,7 +283,6 @@ class Robot:
 
         lower_blue = np.array([100, 100, 100])
         upper_blue = np.array([140, 255, 255])
-
         # Create masks for each color
         mask_red1 = cv2.inRange(hsv_image, lower_red1, upper_red1)
         mask_red2 = cv2.inRange(hsv_image, lower_red2, upper_red2)
@@ -352,36 +329,25 @@ class Robot:
         closest_index = np.argmin(depths)
         closest_depth = depths[closest_index]
         closest_bbox = positions[closest_index]
-        
-        # Extract bounding box information
         x, y, w, h = closest_bbox
-        
-        # Calculate the center of the bounding box
         bbox_center_x = x + w/2
-        
         # Calculate horizontal position relative to image center
         image_center_x = self.camera_width / 2
         relative_x_pos = bbox_center_x - image_center_x
-        
-        # Print debug information
         print(f"Bbox center: {bbox_center_x}, Image center: {image_center_x}")
         print(f"Relative position: {relative_x_pos}")
-        
         # Convert to angle (in radians)
         # Use full FOV for better sensitivity
         angle = (relative_x_pos / image_center_x) * (self.fov * np.pi / 180)
         print(f"Raw angle: {angle:.4f} radians")
-        
         # Apply a scaling factor to make turns more responsive
         scaling_factor = 1.5 #1.5  # Adjust this value to increase/decrease turn sensitivity
         scaled_angle = angle * scaling_factor
         print(f"Scaled angle: {scaled_angle:.4f} radians")
-        
         # Calculate new direction
         direction = self.last_motion_direction + scaled_angle
         print(f"Last motion direction: {self.last_motion_direction:.4f}")
         print(f"New direction: {direction:.4f}")
-        
         # Ensure direction stays within [-pi, pi]
         normalized_direction = ((direction + np.pi) % (2 * np.pi)) - np.pi
         print(f"Final normalized direction: {normalized_direction:.4f}")
@@ -395,17 +361,12 @@ class Robot:
         Args:
             direction: Direction angle in radians
         """
-        # Update speed by adding acceleration (with a maximum limit)
-        # self.current_speed += self.acceleration
         self.current_speed = self.base_speed
-        
         # Calculate velocity components based on direction and speed
         vx = self.current_speed * np.cos(direction)
         vy = self.current_speed * np.sin(direction)
-        
         # Apply velocity to robot
         p.resetBaseVelocity(self.robot_id, [vx, vy, 0], [0, 0, 0])
-        
         # Update last motion direction
         self.last_motion_direction = direction
 
@@ -416,23 +377,12 @@ class Robot:
         Args:
             angle_degrees: Rotation angle in degrees (default: 30)
         """
-        # Convert degrees to radians
         angle_radians = angle_degrees * np.pi / 180
-        
-        # Update the last_motion_direction
         self.last_motion_direction += angle_radians
-        
-        # Normalize to [-pi, pi] range
         self.last_motion_direction = ((self.last_motion_direction + np.pi) % (2 * np.pi)) - np.pi
-        
-        # Get current position and set new orientation
         position, _ = p.getBasePositionAndOrientation(self.robot_id)
         new_orientation = p.getQuaternionFromEuler([0, 0, self.last_motion_direction])
-        
-        # Reset position and orientation
         p.resetBasePositionAndOrientation(self.robot_id, position, new_orientation)
-        
-        # Stop any existing velocity
         p.resetBaseVelocity(self.robot_id, linearVelocity=[0, 0, 0], angularVelocity=[0, 0, 0])
         
         print(f"Rotated by {angle_degrees} degrees, new direction: {self.last_motion_direction:.2f} radians")

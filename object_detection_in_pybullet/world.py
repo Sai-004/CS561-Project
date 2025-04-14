@@ -37,21 +37,8 @@ wall_sizes = [
 # to Create Walls
 walls = []
 wall_friction = 1.0  # Increase friction to ensure no unintended movement
-#for pos, size in zip(wall_positions, wall_sizes):
-    #wall_shape = p.createCollisionShape(p.GEOM_BOX, halfExtents=size)
-    #wall_body = p.createMultiBody(
-    #    baseMass=0,  # Zero mass → Fixed in place
-    #    baseCollisionShapeIndex=wall_shape,
-    #    basePosition=pos
-    #)
-    # Set high friction to prevent unintended sliding
-    #p.changeDynamics(wall_body, -1, lateralFriction=wall_friction)
-    #walls.append(wall_body)
-
 # Change the wall color to brown
 brown_color =  [1.0, 0.5, 0.0, 1]  # RGBA for brown
-#for wall in walls:
-    #p.changeVisualShape(wall, -1, rgbaColor=brown_color)
 
 COLOR_TOKENS = {
     "Wet Waste": 1,   # Blue

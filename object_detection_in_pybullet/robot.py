@@ -12,7 +12,7 @@ from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.image import img_to_array
 
 class Robot:
-    def __init__(self, start_pos, cylinders, speed=0.3, camera_enabled=True):
+    def __init__(self, start_pos, cylinders, speed=0.05, camera_enabled=True):
         self.robot_id = p.loadURDF("r2d2.urdf", start_pos)
         self.available_cylinders = cylinders[:]  
         self.collected_cylinders = []  
@@ -22,22 +22,30 @@ class Robot:
         self.camera_enabled = camera_enabled
         self.attached_object = None
         self.attachment_constraint = None  
+        self.simulation_ready = False
         self.target_bin = None  
         self.last_motion_direction = 0  
         self.bin_fill_index = {1: 0, 2: 0, 3: 0}  
         self.tray_fill_index = 0  # Keeps track of tray filling
         self.current_cylinder_id=None
         self.paused = False
+        self.temp = True
+        self.target_set = False
+        self.last_position = None
+        self.distance_traveled = 0
         self.model = load_model('GarbageCollectorCNN.h5')
         p.changeDynamics(self.robot_id, -1, mass=1000)
         # to Create a tray behind the robot
         self.tray_id, self.partition_ids = self.create_open_tray(start_pos)
+        #self.wait_for_simulation_to_initialize()
+        self.current_target = None
 
         p.changeDynamics(self.robot_id, -1, linearDamping=0, angularDamping=0)
         p.resetBaseVelocity(self.robot_id, [0, 0, 0], [0, 0, 0])
 
         if self.camera_enabled:
             self.setup_camera()
+        self.yolo_class_names = ["red","green","blue"]
     
     def classify_cylinder(self, image):
         """
@@ -111,8 +119,8 @@ class Robot:
         """
         Set up the camera parameters.
         """
-        self.camera_width = 160
-        self.camera_height = 80
+        self.camera_width = 320
+        self.camera_height = 160
         self.fov = 30
         self.aspect = self.camera_width / self.camera_height
         self.near_val = 0.02
@@ -171,61 +179,7 @@ class Robot:
 
         return nearest_cylinder, min_distance
 
-    def move_toward(self, pred_class:int = 3):
-        """
-        Move the robot towards the nearest cylinder.
-        If the robot is close enough, it will pick up the cylinder.
-        """
-        robot_pos, _ = p.getBasePositionAndOrientation(self.robot_id)
-        nearest_cylinder, distance = self.detect_nearest_object()
-
-        if nearest_cylinder:
-            cylinder_id, token, cylinder_pos = nearest_cylinder
-
-            if token == 4:  # Skip token 4
-                self.available_cylinders = [cyl for cyl in self.available_cylinders if cyl[0] != cylinder_id]
-                return
-
-            direction = np.array(cylinder_pos[:2]) - np.array(robot_pos[:2])
-            direction = direction / np.linalg.norm(direction) if np.linalg.norm(direction) > 0 else [0, 0]
-
-            if distance < 0.62:  # If close enough, pick up the cylinder
-                p.resetBaseVelocity(self.robot_id, [0, 0, 0])
-
-                # 4️⃣ Compute tray placement using a grid system
-                tray_size = 2.0
-                grid_size = 3
-                cell_spacing = tray_size / (grid_size + 1)
-
-                index = self.tray_fill_index % (grid_size * grid_size)  # Loop back after filling 3x3
-                row = index // grid_size
-                col = index % grid_size
-
-                tray_x = -1 + (col + 1) * cell_spacing
-                tray_y = -1 + (row + 1) * cell_spacing
-                tray_position = [robot_pos[0] + tray_x, robot_pos[1] + tray_y, robot_pos[2] + 1]
-
-                self.tray_fill_index += 1  
-                #############
-                if pred_class == 0:
-                    tray_position = [robot_pos[0],robot_pos[1]+1,robot_pos[2]+1]
-                elif pred_class == 1:
-                    tray_position = [robot_pos[0],robot_pos[1],robot_pos[2]+1]
-                elif pred_class == 2:
-                    tray_position = [robot_pos[0],robot_pos[1]-1,robot_pos[2]+1]
-                #############
-                # Attach the cylinder to the tray
-                p.resetBasePositionAndOrientation(cylinder_id, tray_position, [0, 0, 0, 0.1])
-                self.collected_cylinders.append((cylinder_id, token))    
-                self.available_cylinders = [cyl for cyl in self.available_cylinders if cyl[0] != cylinder_id]
-                print(f"Collected cylinder {cylinder_id}, token {token}")
-
-            else:  # Move towards the cylinder
-                self.current_speed = min(self.current_speed + self.acceleration, self.base_speed)
-                velocity = self.current_speed * direction
-                p.resetBaseVelocity(self.robot_id, [velocity[0], velocity[1], 0], [0, 0, 0])
-                print("Moving to collect cylinder...")
-
+  
     def check_and_rebalance(self):
         """
         Check if the robot is tilted and rebalance it if necessary.
@@ -238,18 +192,47 @@ class Robot:
             upright_orientation = p.getQuaternionFromEuler([0, 0, yaw])
             p.resetBasePositionAndOrientation(self.robot_id, position, upright_orientation)
 
-    def get_camera_depth(self, tilt_factor=0.4):
+    def process_current_image(self):
         """
-        Capture the camera image and return the actual depth map.
-        Uses the near and far values to convert the depth buffer into actual depth values.
-        """
-        robot_pos, _ = p.getBasePositionAndOrientation(self.robot_id)
-        velocity, _ = p.getBaseVelocity(self.robot_id)
-        velocity_x, velocity_y = velocity[:2]
-        speed_magnitude = np.linalg.norm([velocity_x, velocity_y])
-        if speed_magnitude > 0.2:
-            self.last_motion_direction = np.arctan2(velocity_y, velocity_x)
+        Process the current camera image to detect red, green, and blue cylinders.
+        Find depths of the bounded boxes and return depth values with their positions.
         
+        Returns:
+            tuple: (depths, positions) where:
+                - depths is an array of depth values for each detected cylinder
+                - positions is a list of bounding box positions [x, y, width, height]
+        """
+        # Capture RGB and depth images
+        rgb_image, depth_image = self._get_rgbd_image()
+        
+        # Detect cylinders using color-based detection (simulating YOLO)
+        bounding_boxes = self._detect_cylinders(rgb_image)
+        
+        # Get depth for each bounding box
+        depths = []
+        for bbox in bounding_boxes:
+            x, y, w, h = bbox
+            # Calculate center of bounding box
+            center_x, center_y = int(x + w/2), int(y + h/2)
+            
+            # Get depth at center of bounding box from depth image
+            if 0 <= center_y < depth_image.shape[0] and 0 <= center_x < depth_image.shape[1]:
+                depth = depth_image[center_y, center_x]
+                depths.append(depth)
+            else:
+                depths.append(None)  # Invalid position
+        
+        return depths, bounding_boxes
+
+    def _get_rgbd_image(self):
+        """
+        Get RGB and depth images from the camera (simulating an RGBD sensor).
+        
+        Returns:
+            tuple: (rgb_image, depth_image)
+        """
+        # Camera parameters for consistency
+        robot_pos, _ = p.getBasePositionAndOrientation(self.robot_id)
         camera_eye = np.array(robot_pos) + np.array([
             0.2 * np.cos(self.last_motion_direction),
             0.2 * np.sin(self.last_motion_direction),
@@ -258,79 +241,282 @@ class Robot:
         forward_vector = np.array([
             np.cos(self.last_motion_direction),
             np.sin(self.last_motion_direction),
-            -tilt_factor * 0.7
+            -0.4 * 0.7
         ])
         target_pos = camera_eye + forward_vector
 
-        view_matrix = p.computeViewMatrix(camera_eye.tolist(), target_pos.tolist(), [0, 0, 1])
-        proj_matrix = p.computeProjectionMatrixFOV(self.fov, self.aspect, self.near_val, self.far_val)
-        img_arr = p.getCameraImage(self.camera_width, self.camera_height, view_matrix, proj_matrix)
-        depth_buffer = np.reshape(img_arr[3], (self.camera_height, self.camera_width))
-        actual_depth = self.far_val * self.near_val / (self.far_val - (self.far_val - self.near_val) * depth_buffer)
-        return actual_depth
+        view_matrix = p.computeViewMatrix(
+            camera_eye.tolist(), target_pos.tolist(), [0, 0, 1])
+        proj_matrix = p.computeProjectionMatrixFOV(
+            self.fov, self.aspect, self.near_val, self.far_val)
 
-    def detect_depth_object_ignore_brown(self, threshold_depth=0.43, min_area=100):
+        # Get RGB and depth images in one call
+        img_arr = p.getCameraImage(
+            self.camera_width, self.camera_height, view_matrix, proj_matrix
+        )
+
+        # Extract RGB array and convert to uint8
+        rgb_array = np.reshape(
+            img_arr[2], (self.camera_height, self.camera_width, 4))[:, :, :3]
+        rgb_array = rgb_array.astype(np.uint8)  # Convert to uint8
+
+        # Debugging: Print shape and dtype to verify
+        print(f"RGB image shape: {rgb_array.shape}, dtype: {rgb_array.dtype}")
+
+        # Extract depth buffer and convert to actual distances
+        depth_buffer = np.reshape(
+            img_arr[3], [self.camera_height, self.camera_width])
+        depth_image = self.far_val * self.near_val / \
+            (self.far_val - (self.far_val - self.near_val) * depth_buffer)
+
+        return rgb_array, depth_image
+    
+    def _detect_cylinders(self, image):
         """
-        Detects an object using the depth image but ignores the brown floor.
-        First, it filters out brown areas from the RGB camera feed,
-        then applies that mask to the depth image in a central ROI.
+        Detect red, green, and blue cylinders while ignoring black walls.
         
-        :param threshold_depth: Distance threshold (in meters) to trigger stopping.
-        :param min_area: Minimum number of non-brown pixels with depth <= threshold_depth.
-        :return: Tuple (detected_flag, min_depth, area) where detected_flag is True if an object (non-brown)
-                is close enough.
-        """
-        rgb_image = self.get_camera_feed()      # shape: (height, width, 3)
-        depth_image = self.get_camera_depth()     # shape: (height, width)
-        hsv_image = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2HSV)
-        lower_brown = np.array([10, 100, 20])
-        upper_brown = np.array([20, 255, 200])
-        brown_mask = cv2.inRange(hsv_image, lower_brown, upper_brown)
-        non_brown_mask = cv2.bitwise_not(brown_mask)
-        h, w = depth_image.shape
-        roi_mask = np.zeros_like(non_brown_mask)
-        roi_mask[h//3:2*h//3, w//3:2*w//3] = 255
-        final_mask = cv2.bitwise_and(non_brown_mask, roi_mask)
-        area = cv2.countNonZero(final_mask)
-        # Get the depth values for the non-brown pixels within the ROI.
-        depth_values = depth_image[final_mask > 0]
-        if depth_values.size == 0:
-            #print("No non-brown pixels found in ROI.")
-            return False, None, 0
-        min_depth = np.min(depth_values)
-        #print(f"Non-brown detection: area = {area} pixels, min depth = {min_depth:.2f} m").
-        if min_depth <= threshold_depth and area >= min_area:
-            #print("Object detected (non-brown) within threshold.")
-            return True, min_depth, area
-        else:
-            #print("No valid non-brown object detected within threshold.")
-            return False, min_depth, area
-
-    def take_screenshot(self, folder='data_for_training'):
-        """
-        Capture the current camera feed and save it as an image file in the specified folder.
+        Args:
+            image: RGB image from the camera
         
-        :param folder: Directory where screenshots will be stored.
+        Returns:
+            list: List of bounding boxes [x, y, width, height]
         """
-        image = self.get_camera_feed()
-        bgr_image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-        if not os.path.exists(folder):
-            os.makedirs(folder)
-        filename = f"screenshot_{int(time.time())}.png"
-        filepath = os.path.join(folder, filename)
-        cv2.imwrite(filepath, bgr_image)
-        #print("Screenshot saved to:", filepath)
+        # Verify image format
+        print(f"Input image shape: {image.shape}, dtype: {image.dtype}")
+        if image.dtype != np.uint8:
+            image = image.astype(np.uint8)
+            print("Converted image to uint8")
 
+        # Convert image to HSV for better color segmentation
+        hsv_image = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+
+        # Create a mask to exclude black regions
+        _, _, v_channel = cv2.split(hsv_image)
+        not_black_mask = cv2.threshold(v_channel, 30, 255, cv2.THRESH_BINARY)[1]
+
+        # Define color ranges for each cylinder color
+        lower_red1 = np.array([0, 100, 100])
+        upper_red1 = np.array([10, 255, 255])
+        lower_red2 = np.array([160, 100, 100])
+        upper_red2 = np.array([180, 255, 255])
+
+        lower_green = np.array([40, 100, 100])
+        upper_green = np.array([80, 255, 255])
+
+        lower_blue = np.array([100, 100, 100])
+        upper_blue = np.array([140, 255, 255])
+
+        # Create masks for each color
+        mask_red1 = cv2.inRange(hsv_image, lower_red1, upper_red1)
+        mask_red2 = cv2.inRange(hsv_image, lower_red2, upper_red2)
+        mask_red = cv2.bitwise_or(mask_red1, mask_red2)
+
+        mask_green = cv2.inRange(hsv_image, lower_green, upper_green)
+        mask_blue = cv2.inRange(hsv_image, lower_blue, upper_blue)
+
+        # Apply the not-black mask
+        mask_red = cv2.bitwise_and(mask_red, not_black_mask)
+        mask_green = cv2.bitwise_and(mask_green, not_black_mask)
+        mask_blue = cv2.bitwise_and(mask_blue, not_black_mask)
+
+        # List to store all bounding boxes
+        all_bounding_boxes = []
+
+        # Process each color mask
+        for mask in [mask_red, mask_green, mask_blue]:
+            contours, _ = cv2.findContours(
+                mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for contour in contours:
+                if cv2.contourArea(contour) > 50:  # Minimum area threshold
+                    x, y, w, h = cv2.boundingRect(contour)
+                    all_bounding_boxes.append([x, y, w, h])
+
+        return all_bounding_boxes
+    
+    def find_direction(self, depths, positions):
+        """
+        Calculate the direction to move based on detected cylinders.
+        
+        Args:
+            depths: List of depth values for each detected cylinder
+            positions: List of bounding box positions [x, y, width, height]
+        
+        Returns:
+            float: Direction angle in radians
+        """
+        if not depths or not positions:
+            print("No valid depths or positions")
+            return self.last_motion_direction
+        
+        # Find the closest cylinder (smallest depth)
+        closest_index = np.argmin(depths)
+        closest_depth = depths[closest_index]
+        closest_bbox = positions[closest_index]
+        
+        # Extract bounding box information
+        x, y, w, h = closest_bbox
+        
+        # Calculate the center of the bounding box
+        bbox_center_x = x + w/2
+        
+        # Calculate horizontal position relative to image center
+        image_center_x = self.camera_width / 2
+        relative_x_pos = bbox_center_x - image_center_x
+        
+        # Print debug information
+        print(f"Bbox center: {bbox_center_x}, Image center: {image_center_x}")
+        print(f"Relative position: {relative_x_pos}")
+        
+        # Convert to angle (in radians)
+        # Use full FOV for better sensitivity
+        angle = (relative_x_pos / image_center_x) * (self.fov * np.pi / 180)
+        print(f"Raw angle: {angle:.4f} radians")
+        
+        # Apply a scaling factor to make turns more responsive
+        scaling_factor = 1.5 #1.5  # Adjust this value to increase/decrease turn sensitivity
+        scaled_angle = angle * scaling_factor
+        print(f"Scaled angle: {scaled_angle:.4f} radians")
+        
+        # Calculate new direction
+        direction = self.last_motion_direction + scaled_angle
+        print(f"Last motion direction: {self.last_motion_direction:.4f}")
+        print(f"New direction: {direction:.4f}")
+        
+        # Ensure direction stays within [-pi, pi]
+        normalized_direction = ((direction + np.pi) % (2 * np.pi)) - np.pi
+        print(f"Final normalized direction: {normalized_direction:.4f}")
+        
+        return normalized_direction
+
+    def move_in_direction(self, direction):
+        """
+        Move the robot in the specified direction using current speed and acceleration.
+        
+        Args:
+            direction: Direction angle in radians
+        """
+        # Update speed by adding acceleration (with a maximum limit)
+        # self.current_speed += self.acceleration
+        self.current_speed = self.base_speed
+        
+        # Calculate velocity components based on direction and speed
+        vx = self.current_speed * np.cos(direction)
+        vy = self.current_speed * np.sin(direction)
+        
+        # Apply velocity to robot
+        p.resetBaseVelocity(self.robot_id, [vx, vy, 0], [0, 0, 0])
+        
+        # Update last motion direction
+        self.last_motion_direction = direction
+
+    def rotate(self, angle_degrees=30):
+        """
+        Rotate the robot by the specified angle in degrees while staying in place.
+        
+        Args:
+            angle_degrees: Rotation angle in degrees (default: 30)
+        """
+        # Convert degrees to radians
+        angle_radians = angle_degrees * np.pi / 180
+        
+        # Update the last_motion_direction
+        self.last_motion_direction += angle_radians
+        
+        # Normalize to [-pi, pi] range
+        self.last_motion_direction = ((self.last_motion_direction + np.pi) % (2 * np.pi)) - np.pi
+        
+        # Get current position and set new orientation
+        position, _ = p.getBasePositionAndOrientation(self.robot_id)
+        new_orientation = p.getQuaternionFromEuler([0, 0, self.last_motion_direction])
+        
+        # Reset position and orientation
+        p.resetBasePositionAndOrientation(self.robot_id, position, new_orientation)
+        
+        # Stop any existing velocity
+        p.resetBaseVelocity(self.robot_id, linearVelocity=[0, 0, 0], angularVelocity=[0, 0, 0])
+        
+        print(f"Rotated by {angle_degrees} degrees, new direction: {self.last_motion_direction:.2f} radians")
+
+    
     def update(self):
+        #if self.temp==False:
+            #time.sleep(1)
+            #return
         if self.paused:
             return
         self.check_and_rebalance()
-        detected, _, _ = self.detect_depth_object_ignore_brown(threshold_depth=0.43, min_area=100)
-        predicted_class = None
-        if detected:
-            #self.take_screenshot()
-            predicted_class = self.take_screenshot_and_classify() 
-            print(f"Detected cylinder class: {predicted_class}")
+        depths, positions = self.process_current_image()
+        # self.check_and_rebalance()
+        current_position, _ = p.getBasePositionAndOrientation(self.robot_id)
+        #print("Depths:", depths)
+        # self.check_and_rebalance()
+        #print("Positions:", positions)
+        #print(self.target_set)
+        if depths and positions and self.target_set==False:
+            self.simulation_ready = True
+            closest_index = np.argmin(depths)
+            closest_depth = depths[closest_index]
+            closest_bbox = positions[closest_index]
+            self.target_depth = closest_depth * 65
+            print("@@@@",self.target_depth)
+            self.target_set = True
+
+            direction = self.find_direction(depths, positions)
+            # self.check_and_rebalance()
+            print("----==================",depths)
+            print("--------------------------------",positions)
+            self.move_in_direction(direction)
+            # self.check_and_rebalance()
+            self.last_position = current_position
+            print(f"Moving in direction: {direction} radians")
+        elif not depths and self.target_set==False:
+            if self.simulation_ready != False:
+                time.sleep(10)
+                # self.check_and_rebalance()
+                self.rotate(30)
+                # self.check_and_rebalance()
+                time.sleep(10)
+        elif self.target_set==True and self.last_position is not None:
+            distance_moved = np.linalg.norm(np.array(current_position[:2]) - np.array(self.last_position[:2]))
+            print("----------")
+            self.distance_traveled += distance_moved
+            print("---------",self.distance_traveled)
+            target_travel_distance = 0.8 * self.target_depth
+            if self.distance_traveled >= target_travel_distance:
+                # self.check_and_rebalance()
+                p.resetBaseVelocity(self.robot_id, [0, 0, 0], [0, 0, 0])
+                # self.check_and_rebalance()
+                self.current_speed = 0
+                self.target_set = False
+                self.temp = False
+                print(f"Stopped after traveling {self.distance_traveled:.2f}m, reached target distance")
+                # self.check_and_rebalance()
+                nearest_cylinder, distance = self.detect_nearest_object()
+                # self.check_and_rebalance()
+                cylinder_id, token, cylinder_pos = nearest_cylinder
+                self.distance_traveled = 0
+                pred_class = (token-1)%3
+                #############
+                if pred_class == 0:
+                    tray_position = [current_position[0],current_position[1]+1,current_position[2]+1]
+                elif pred_class == 1:
+                    tray_position = [current_position[0],current_position[1],current_position[2]+1]
+                elif pred_class == 2:
+                    tray_position = [current_position[0],current_position[1]-1,current_position[2]+1]
+                #############
+                # Attach the cylinder to the tray
+                time.sleep(2)
+                print(",,,,,",cylinder_id)
+                print("......",tray_position)
+                p.resetBasePositionAndOrientation(cylinder_id, tray_position, [0, 0, 0, 0.1])
+                self.collected_cylinders.append((cylinder_id, token))    
+                self.available_cylinders = [cyl for cyl in self.available_cylinders if cyl[0] != cylinder_id]
+                print(f"Collected cylinder {cylinder_id}, token {token}")
+            else:
+                self.current_speed = self.base_speed
+                vx = self.current_speed * np.cos(self.last_motion_direction)
+                vy = self.current_speed * np.sin(self.last_motion_direction)
+                # self.check_and_rebalance()
+                p.resetBaseVelocity(self.robot_id, [vx, vy, 0], [0, 0, 0])
+            # self.check_and_rebalance()
         self.paused = False
-        self.get_camera_feed()
-        self.move_toward(pred_class=predicted_class)
